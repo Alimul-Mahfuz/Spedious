@@ -1,0 +1,28 @@
+# Binaries
+bin/
+dist/
+/spedious
+/spedious.exe
+/spd
+/spd.exe
+
+# Test coverage
+coverage.out
+coverage.html
+*.test
+
+# Go local cache & path
+.gocache/
+.gopath/
+
+# Go workspace
+go.work
+go.work.sum
+
+# OS & Editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
