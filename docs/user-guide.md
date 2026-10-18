@@ -1,621 +1,359 @@
-# Spedious User Guide: Writing Scenarios & Operating the CLI
+# Spedious User Guide: How to Test Your APIs Like a Pro
 
-> **Audience**: Testers, QA Engineers, DevOps, and Developers.  
-> **Prerequisites**: **None!** You do **not** need to know the Go programming language to use Spedious. Spedious runs as a standalone single binary (like `curl`, `kubectl`, or `git`), and test scenarios are written purely in YAML.
+> **Who is this for?** Everyone! Even if you have **never written a single line of Go code** in your life, you can master Spedious in 5 minutes. Spedious runs as an easy-to-use tool (just like `curl` or `git`), and test instructions are written in simple, readable YAML text.
 
 ---
 
 ## Table of Contents
 
-1. [Introduction](#1-introduction)
-2. [Installation & Getting the Binary](#2-installation--getting-the-binary)
-3. [Quick Start in 2 Minutes](#3-quick-start-in-2-minutes)
-4. [Writing Scenarios (YAML Reference)](#4-writing-scenarios-yaml-reference)
-   - [Basic Anatomy](#basic-anatomy)
-   - [Dynamic Variables & Built-in Functions](#dynamic-variables--built-in-functions)
-   - [Requests (Methods, Headers, Body, Auth)](#requests-methods-headers-body-auth)
-   - [Response Extractors](#response-extractors)
-   - [Assertions (Validating Responses)](#assertions-validating-responses)
-   - [Think Time & Delays](#think-time--delays)
-   - [Control Flow (`if`, `loop`, `group`)](#control-flow-if-loop-group)
-   - [Reusable Fragments (`include`)](#reusable-fragments-include)
-   - [Pass/Fail Thresholds](#passfail-thresholds)
-5. [Operating the CLI](#5-operating-the-cli)
-   - [Validating Scenarios](#validating-scenarios)
-   - [Running Scenarios](#running-scenarios)
-   - [Command-line Overrides](#command-line-overrides)
-6. [Reading & Understanding Test Results](#6-reading--understanding-test-results)
-7. [Full Real-World Tutorial](#7-full-real-world-tutorial)
-8. [Common Mistakes & Troubleshooting](#8-common-mistakes--troubleshooting)
+1. [Explain It Like I'm 10: How Spedious Works](#1-explain-it-like-im-10-how-spedious-works)
+2. [The 6 Building Blocks (The Robot Army Metaphor)](#2-the-6-building-blocks-the-robot-army-metaphor)
+3. [Installing & Running the App (No Coding Needed)](#3-installing--running-the-app-no-coding-needed)
+4. [Step-by-Step: Writing Your First Scenario](#4-step-by-step-writing-your-first-scenario)
+5. [The Robot's Secret Powers (Variables & Functions)](#5-the-robots-secret-powers-variables--functions)
+6. [Response Extractors (The Robot's Notebook)](#6-response-extractors-the-robots-notebook)
+7. [Assertions (The Robot's Inspection Checklist)](#7-assertions-the-robots-inspection-checklist)
+8. [Load Shapes (How Your Robots Enter the Store)](#8-load-shapes-how-your-robots-enter-the-store)
+   - [Closed Model (The Revolving Door)](#closed-model-the-revolving-door)
+   - [Open Model (The School Bus Schedule)](#open-model-the-school-bus-schedule)
+9. [Operating the CLI (Just 2 Commands!)](#9-operating-the-cli-just-2-commands)
+10. [Reading the Report Card (Test Results)](#10-reading-the-report-card-test-results)
+11. [Exporting Results (JSON & CSV)](#11-exporting-results-json--csv)
+12. [Common Pitfalls & Troubleshooting](#12-common-pitfalls--troubleshooting)
 
 ---
 
-## 1. Introduction
+## 1. Explain It Like I'm 10: How Spedious Works
 
-**Spedious** is a high-performance API load and throttle testing tool. It allows you to simulate hundreds or thousands of concurrent virtual users (VUs) executing complex API workflows (e.g., login $\rightarrow$ extract auth token $\rightarrow$ fetch item $\rightarrow$ create order with dynamic data) without writing any code.
+Imagine you opened the most popular **lemonade stand** in your neighborhood:
+
+* When **1 friend** walks up, you pour a cup of lemonade in **5 seconds**. Easy!
+* But what happens when the entire school—**1,000 thirsty kids**—rushes your stand at the exact same second?
+  * Will you run out of cups?
+  * Will your table collapse under the pressure?
+  * Will the kid at the back of the line have to wait 20 minutes?
+
+**Spedious is your Robot Customer Simulator.**
+
+Instead of waiting for real humans to crash your website or API on launch day, you tell Spedious:
+> *"Hey Spedious! Send 500 robot friends to my online store. Have them log in, search for a toy, and buy it. Time every single click with a precision stopwatch and tell me if anything breaks!"*
+
+Spedious releases the robots, collects every millisecond of timing data, and gives your website a clean **Pass or Fail report card**.
 
 ---
 
-## 2. Installation & Getting the Binary
+## 2. The 6 Building Blocks (The Robot Army Metaphor)
 
-Spedious is packaged as a single standalone executable file. You do not need Go, Python, or Node.js installed.
+When you write a test file in Spedious, you are simply giving instructions to your robot helpers using 6 basic concepts:
 
-### Option A: Using the Prebuilt Binary
-1. Download the `spedious` (or `spedious.exe` for Windows) binary for your operating system.
-2. Place it in a folder of your choice or add it to your system `PATH`.
-3. Verify by opening a terminal / command prompt and running:
-   ```bash
-   spedious version
-   ```
-   *(Short alias `spd` also works)*.
-
-### Option B: Building from Source (Developers Only)
-If you already have Go installed and want to build from source:
-```bash
-make build
-# Binary is generated in ./bin/spedious
+```
+┌─────────────────────────────────────────────────────────────┐
+│ 1. Virtual User (VU)  → A robot friend with a stopwatch     │
+│ 2. Step               → One action (e.g. "Buy lemonade")    │
+│ 3. Variables          → The robot's backpack (saved notes)  │
+│ 4. Extractor          → Writing down the order ticket #     │
+│ 5. Assertion          → Quality check ("Was it delicious?") │
+│ 6. Threshold          → The final report card grade         │
+└─────────────────────────────────────────────────────────────┘
 ```
 
+1. **Virtual User (VU) = A Robot Friend**  
+   If you set `vus: 10`, you have 10 robots visiting your website at the same time.
+2. **Step = An Action**  
+   A step is one thing the robot does. For example: "Go to `/items` and look at the toys."
+3. **Variables = The Robot's Memory**  
+   Save common information like the website address (`baseUrl: http://localhost:8080`) so you never have to re-type it.
+4. **Extractor = The Robot's Notebook**  
+   When the robot logs in, the server gives it a VIP Wristband (Token). The robot writes that token down in its notebook so it can enter the VIP lounge in the next step!
+5. **Assertion = The Quality Checklist**  
+   "Did the cashier say Hello (HTTP status `200`)?"  
+   "Did I get my item in under 500 milliseconds?"  
+   If yes $\rightarrow$ Green Checkmark (`✓`). If no $\rightarrow$ Red Flag (`✗`).
+6. **Threshold = The Final Report Card**  
+   "To pass the test, 95% of orders must take less than 1 second, and the error rate must be under 1%." If your server fails the goal, Spedious fails with a red alarm.
+
 ---
 
-## 3. Quick Start in 2 Minutes
+## 3. Installing & Running the App (No Coding Needed)
 
-Create a file named `quickstart.yaml`:
+Spedious is a single file called an executable binary (`spedious.exe` on Windows, or `spedious` on Mac/Linux). 
+
+You **never** have to compile code or learn Go. 
+
+### Step 1: Open Terminal / Command Prompt
+Navigate to where Spedious is stored:
+```powershell
+cd E:\MyProject\Spedious
+```
+
+### Step 2: Check It Works
+Type this command:
+```powershell
+.\bin\spedious.exe version
+```
+Spedious will proudly say:
+```text
+spedious version 0.1.0-dev
+```
+
+You are ready to roll!
+
+---
+
+## 4. Step-by-Step: Writing Your First Scenario
+
+Create a plain text file named `my_first_test.yaml`:
 
 ```yaml
 version: 1
-name: my_first_test
+name: my_first_lemonade_stand_test
 
+# Where the robots should go
 variables:
   baseUrl: https://httpbin.org
 
+# What the robots should do
 scenarios:
-  ping_service:
+  customer_visit:
     load:
-      executor: constant-users
-      vus: 10              # 10 virtual users
-      duration: 10s        # run for 10 seconds
+      executor: constant-users  # Keep a steady group of robots
+      vus: 5                    # 5 robot friends
+      duration: 10s             # Visit for 10 seconds
     steps:
       - request:
-          name: health_check
+          name: check_menu
           method: GET
           url: ${baseUrl}/get
         assert:
-          - status == 200
-          - latency < 800ms
+          - status == 200       # Did the page load successfully?
+          - latency < 1s        # Was it faster than 1 second?
 ```
 
-### Step 1: Validate Your Scenario
-Before sending any traffic, check that your YAML syntax and settings are correct:
-```bash
-spedious validate quickstart.yaml
-```
-Output:
-```text
-✓ Scenario "my_first_test" (v1) is valid
-  Scenarios defined: 1
-  * ping_service (executor: constant-users, steps: 1)
-```
-
-### Step 2: Execute the Test
-```bash
-spedious run quickstart.yaml
-```
-You will see live terminal progress and an end-of-test metrics summary!
+That's it! In less than 20 lines of simple English-like text, you wrote a complete multi-user load test.
 
 ---
 
-## 4. Writing Scenarios (YAML Reference)
+## 5. The Robot's Secret Powers (Variables & Functions)
 
-Every scenario file starts with `version: 1` and has a `name`.
+Robots don't just repeat the exact same thing; they can generate magic random data on the fly using `${...}`:
 
-### Basic Anatomy
-
-```yaml
-version: 1
-name: test_name
-
-# Global variables accessible anywhere
-variables:
-  baseUrl: https://api.mycompany.com
-
-# Reusable blocks of steps
-fragments:
-  # ...
-
-# Workload configurations
-scenarios:
-  main_workflow:
-    load:
-      executor: constant-users   # constant-users or per-vu-iterations
-      vus: 50
-      duration: 30s
-    steps:
-      # Ordered list of actions
-      - request: { ... }
-
-# Performance thresholds that determine pass/fail
-thresholds:
-  - metric: http_req_duration
-    rule: p(95) < 500ms
-```
-
----
-
-### Dynamic Variables & Built-in Functions
-
-Spedious includes a powerful templating engine. Any `${...}` placeholder is evaluated dynamically at runtime.
-
-| Syntax | Description | Example |
+| Magic Word | What It Does (Metaphor) | Example |
 |---|---|---|
-| `${varName}` | Value of a declared variable | `${baseUrl}/items` |
-| `${uuid()}` | Generates a new UUID v4 | `Idempotency-Key: ${uuid()}` |
-| `${random(min, max)}` | Random integer between min and max | `count: ${random(1, 100)}` |
-| `${randomString(n)}` | Random alphanumeric string of length `n` | `id: "${randomString(8)}"` |
-| `${now()}` | Current ISO 8601 timestamp | `timestamp: "${now()}"` |
-| `${timestamp()}` | Current epoch time in milliseconds | `time: ${timestamp()}` |
-| `${env("NAME")}` | Reads an environment variable from your OS | `token: "${env("API_TOKEN")}"` |
-| `${vu.id}` | ID of current Virtual User (e.g., 1, 2, 3...) | `email: "user_${vu.id}@test.com"` |
-| `${vu.iteration}` | Current iteration number for this VU | `test_run_${vu.iteration}` |
-| `${status}` | HTTP status code of the preceding request | `${status} == 200` |
-| `${latency}` | Duration in ms of the preceding request | `${latency} < 250` |
+| `${uuid()}` | Generates a guaranteed 100% unique secret ID | `Idempotency-Key: ${uuid()}` |
+| `${random(1, 100)}` | Rolls a 100-sided dice for random quantities | `cups: ${random(1, 10)}` |
+| `${randomString(8)}` | Makes up a random 8-letter username | `username: "kid_${randomString(8)}"` |
+| `${now()}` | Looks at the clock and writes down the exact time | `orderTime: "${now()}"` |
+| `${timestamp()}` | Milliseconds since the year 1970 | `clock: ${timestamp()}` |
+| `${vu.id}` | The robot's personal jersey number (1, 2, 3...) | `email: "robot_${vu.id}@school.com"` |
+| `${vu.iteration}` | How many times this robot has completed the loop | `round_${vu.iteration}` |
+| `${status}` | The status code of the previous step | `${status} == 200` |
+| `${latency}` | How many milliseconds the previous step took | `${latency} < 500` |
 
 ---
 
-### Requests (Methods, Headers, Body, Auth)
+## 6. Response Extractors (The Robot's Notebook)
 
-A request step executes an HTTP call:
+When your robot orders food, the kitchen gives them an **Order Ticket ID** (like `#512`). How does the robot remember this number so it can pick up the food later?
 
-```yaml
-- request:
-    name: create_user                 # Descriptive step name
-    method: POST                      # GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS
-    url: ${baseUrl}/api/v1/users
-    headers:
-      Content-Type: application/json
-      X-Correlation-Id: ${uuid()}
-    query:
-      notify: "true"
-    body:                             # Automatically JSON-encoded if provided as a map
-      email: "user_${vu.id}@example.com"
-      role: "member"
-      age: ${random(18, 65)}
-    timeout: 5s                       # Per-request timeout
-    onFailure: abort_iteration        # abort_iteration | continue | abort_test
-```
-
-#### Authentication Helpers
-Spedious provides built-in authentication helpers:
-
-- **Bearer Token**:
-  ```yaml
-  auth:
-    type: bearer
-    token: "${jwtToken}"
-  ```
-- **Basic Auth**:
-  ```yaml
-  auth:
-    type: basic
-    username: "admin"
-    password: "${env("ADMIN_PASS")}"
-  ```
-
----
-
-### Response Extractors
-
-Extract values from an HTTP response to use in future steps within the same Virtual User.
+**Answer: Extractors!**
 
 ```yaml
 - request:
-    name: login_call
+    name: place_order
     method: POST
-    url: ${baseUrl}/login
+    url: ${baseUrl}/api/orders
+    body:
+      flavor: "Strawberry"
   extract:
-    # 1. JSONPath (searches response JSON body)
-    authToken: { jsonpath: "$.token" }
-    firstItemId: { jsonpath: "$[0].id" }
-    nestedValue: { jsonpath: "$.user.profile.id" }
+    # Look at the JSON receipt and copy "id" into the robot's notebook under ${myOrderId}
+    myOrderId: { jsonpath: "$.id" }
 
-    # 2. Regular Expression (captures with regex)
-    csrfToken: { regex: 'name="_csrf" value="([^"]+)"' }
-
-    # 3. Response Header
-    etagVal: { header: "ETag" }
-
-    # 4. Status Code & Latency
-    loginStatus: { status: true }
-    loginLatency: { latency: true }
+# In the very next step, the robot uses ${myOrderId}!
+- request:
+    name: pickup_order
+    method: GET
+    url: ${baseUrl}/api/orders/${myOrderId}
+  assert:
+    - status == 200
 ```
-
-Once extracted, you can immediately use `${authToken}` or `${firstItemId}` in all following steps!
 
 ---
 
-### Assertions (Validating Responses)
+## 7. Assertions (The Robot's Inspection Checklist)
 
-Assertions verify that the API is behaving correctly. If an assertion fails, the request is recorded as an error.
+An assertion is a question your robot asks after every step. If the answer is NO, the robot marks it as an **Error**.
 
 ```yaml
 assert:
-  # Status code checks
+  # 1. Did the website say "All Good" (Status 200)?
   - status == 200
-  - status != 500
-  - status in [200, 201, 204]
 
-  # Latency checks
+  # 2. Or was it one of our accepted codes?
+  - status in [200, 201]
+
+  # 3. Did it reply in under half a second?
   - latency < 500ms
-  - latency <= 1s
 
-  # Body checks
-  - body contains "success"
-  - body not contains "Internal Error"
+  # 4. Does the text contain what we expected?
+  - body contains "Thank you for your order"
 
-  # Header checks
-  - header.Content-Type contains "json"
-  - header.X-Cache == "HIT"
-
-  # JSONPath value checks
-  - jsonpath $.success == true
-  - jsonpath $.count > 0
-  - jsonpath $.user.role == "member"
+  # 5. Check a specific piece of JSON data:
+  - jsonpath $.orderStatus == "ready"
+  - jsonpath $.totalItems > 0
 ```
 
 ---
 
-### Think Time & Delays
+## 8. Load Shapes (How Your Robots Enter the Store)
 
-Real users do not hammer APIs instantly without pausing. Use `thinkTime` to simulate real-world user pacing:
+Spedious gives you two ways to send robots into your system:
 
-```yaml
-- request:
-    name: browse_catalog
-    method: GET
-    url: ${baseUrl}/catalog
-    thinkTime: 1s-3s       # Uniform random pause between 1 and 3 seconds
-```
-
-Or a fixed sleep step:
-```yaml
-- sleep: 500ms             # Pauses execution for 500 milliseconds
-```
-
----
-
-### Control Flow (`if`, `loop`, `group`)
-
-#### 1. Conditional Execution (`if`)
-Run steps only when a condition matches:
-```yaml
-- if:
-    condition: ${status} == 409
-    then:
-      - sleep: 1s
-      - request:
-          name: retry_call
-          method: GET
-          url: ${baseUrl}/status
-    else:
-      - sleep: 100ms
-```
-
-#### 2. Repeating Steps (`loop`)
-Loop a specified number of times:
-```yaml
-- loop:
-    count: 3
-    steps:
-      - request:
-          name: poll_job
-          method: GET
-          url: ${baseUrl}/jobs/${jobId}
-      - sleep: 200ms
-```
-
-#### 3. Group Transactions (`group`)
-Group multiple steps into a measured transaction:
-```yaml
-- group:
-    name: complete_checkout
-    steps:
-      - request: { name: payment, method: POST, url: "${baseUrl}/pay" }
-      - request: { name: receipt, method: GET, url: "${baseUrl}/receipt" }
-```
+### Closed Model (The Revolving Door)
+*Imagine a revolving door at a department store.* Only a fixed number of people fit inside at once.
+- **`constant-users`**: You tell 20 robots to go shopping. Whenever a robot finishes, it immediately shops again until the timer runs out.
+  ```yaml
+  load:
+    executor: constant-users
+    vus: 20
+    duration: 30s
+  ```
+- **`per-vu-iterations`**: Exactly 10 robots each buy 1 item and then go home.
+  ```yaml
+  load:
+    executor: per-vu-iterations
+    vus: 10
+    iterations: 1
+  ```
+- **`ramping-users`**: Start with 5 robots, then gradually invite 50 robots, then slow down.
+  ```yaml
+  load:
+    executor: ramping-users
+    stages:
+      - { duration: 10s, target: 10 }   # Start gentle
+      - { duration: 20s, target: 50 }   # Rush hour!
+      - { duration: 10s, target: 0 }    # Closing time
+  ```
 
 ---
 
-### Reusable Fragments (`include`)
+### Open Model (The School Bus Schedule)
+*Imagine a school bus dropping off 30 kids every 10 seconds.*
+The bus does **not** care if the lemonade stand is slow or fast. The kids arrive on schedule!
 
-Define common step sequences once under `fragments:` and reuse them across scenarios:
+If your server gets slow, a huge line forms outside. Measuring this line is called **preventing Coordinated Omission**—it guarantees that true waiting room delays are never hidden from your charts!
 
-```yaml
-fragments:
-  login:
-    - request:
-        name: do_login
-        method: POST
-        url: ${baseUrl}/auth/login
-        body: { user: "test", pass: "test" }
-      extract:
-        token: { jsonpath: "$.token" }
-
-scenarios:
-  scenario_one:
-    load: { executor: constant-users, vus: 10, duration: 10s }
-    steps:
-      - include: login
-      - request: { name: profile, method: GET, url: "${baseUrl}/me", headers: { Authorization: "Bearer ${token}" } }
-```
-
----
-
-### Pass/Fail Thresholds
-
-Thresholds define the service level objectives (SLOs) of your test. If any threshold is breached, Spedious finishes with **exit code 1**, making it seamless to fail a CI/CD build.
-
-```yaml
-thresholds:
-  - metric: http_req_duration
-    rule: p(95) < 300ms       # 95th percentile latency must be under 300ms
-  - metric: http_req_duration
-    rule: max < 1s            # Maximum response time must be under 1s
-  - metric: error_rate
-    rule: rate < 0.01         # Total errors must be under 1% of total requests
-```
-
----
-
-## 5. Operating the CLI
-
-### Validating Scenarios
-
-Always validate your scenario before starting a load test:
-
-```bash
-spedious validate my_scenario.yaml
-```
-
-If you made a typo or wrote an invalid duration, Spedious provides an exact line number:
-```text
-Error: validation error in my_scenario.yaml: line 14: [scenarios.main.load.executor] invalid executor "unknown-type"
-```
-
----
-
-### Running Scenarios
-
-```bash
-spedious run my_scenario.yaml
-```
-
-#### Command-line Overrides
-You don't need to edit your YAML file to test different loads. You can override settings right from your terminal:
-
-```bash
-# Override the number of concurrent virtual users (VUs)
-spedious run my_scenario.yaml --vus 100
-
-# Override the duration
-spedious run my_scenario.yaml --duration 5m
-
-# Combine overrides
-spedious run my_scenario.yaml --vus 50 --duration 2m
-
-# Export JSON summary report
-spedious run my_scenario.yaml --summary-export report.json
-
-# Export time-series metrics to CSV
-spedious run my_scenario.yaml --out csv=timeseries.csv
-
-# Abort test immediately if any threshold is violated
-spedious run my_scenario.yaml --abort-on-fail
-
-# Quiet mode (disables live ticker for clean CI/CD log output)
-spedious run my_scenario.yaml --quiet
-```
-
----
-
-### Load Shape Executors Reference
-
-Spedious supports both **Closed** (concurrency-focused) and **Open** (arrival-rate-focused) models:
-
-#### 1. `constant-users` (Closed Model)
-A fixed number of VUs looping continuously for a set duration:
-```yaml
-load:
-  executor: constant-users
-  vus: 50
-  duration: 1m
-```
-
-#### 2. `ramping-users` (Closed Model)
-Ramps VUs up and down across defined stages:
-```yaml
-load:
-  executor: ramping-users
-  stages:
-    - { duration: 30s, target: 50 }   # Ramp up to 50 VUs over 30s
-    - { duration: 1m, target: 50 }    # Stay at 50 VUs for 1 minute
-    - { duration: 15s, target: 0 }    # Ramp down to 0
-```
-
-#### 3. `per-vu-iterations` (Closed Model)
-Each VU completes a fixed number of iterations, then stops:
-```yaml
-load:
-  executor: per-vu-iterations
-  vus: 10
-  iterations: 100                    # Each VU runs 100 times (total 1,000 iterations)
-```
-
-#### 4. `shared-iterations` (Closed Model)
-A shared total pool of iterations distributed among VUs:
-```yaml
-load:
-  executor: shared-iterations
-  vus: 10
-  iterations: 500                    # 10 workers consume from 500 total iterations
-```
-
-#### 5. `constant-arrival-rate` (Open Model - Avoids Coordinated Omission)
-Starts iterations at a constant rate regardless of target response times. If the target server slows down, queued latency is accurately captured rather than understated:
 ```yaml
 load:
   executor: constant-arrival-rate
-  rate: 100                          # 100 iterations per timeUnit
+  rate: 30                  # 30 new customers every second
   timeUnit: 1s
   duration: 1m
-  maxVUs: 200                        # Maximum concurrent worker capacity
+  maxVUs: 200               # Max room capacity
 ```
 
-#### 6. `ramping-arrival-rate` (Open Model)
-Ramps the arrival rate across stages:
-```yaml
-load:
-  executor: ramping-arrival-rate
-  stages:
-    - { duration: 30s, target: 50 }   # Ramp to 50 iterations/sec
-    - { duration: 1m, target: 100 }   # Ramp to 100 iterations/sec
-  maxVUs: 300
+If the store runs out of room, Spedious logs **Dropped Iterations**, letting you know your servers are completely overwhelmed!
+
+---
+
+## 9. Operating the CLI (Just 2 Commands!)
+
+You only ever need to know two commands:
+
+### Command 1: "Check My Homework" (`validate`)
+Before running any test, ask Spedious to check for typos or formatting errors:
+```powershell
+.\bin\spedious.exe validate my_first_test.yaml
+```
+Output:
+```text
+✓ Scenario "my_first_lemonade_stand_test" (v1) is valid
+```
+
+### Command 2: "Release the Robots!" (`run`)
+Run the test:
+```powershell
+.\bin\spedious.exe run my_first_test.yaml
+```
+
+#### Change Your Mind? Override on the Fly!
+You don't even have to open the text file to change the test:
+```powershell
+# "Make it 50 robots instead of 5!"
+.\bin\spedious.exe run my_first_test.yaml --vus 50
+
+# "Run it for 2 minutes!"
+.\bin\spedious.exe run my_first_test.yaml --duration 2m
+
+# "Stop immediately if anything breaks!"
+.\bin\spedious.exe run my_first_test.yaml --abort-on-fail
 ```
 
 ---
 
-## 6. Reading & Understanding Test Results
+## 10. Reading the Report Card (Test Results)
 
-While the test is running, you see a live progress line:
-```text
-[running] elapsed: 5.00s  | VUs: 20   | reqs: 12050  (2410.0/s) | errs: 0 (0.0%) | p95: 1.8ms
-```
-- **elapsed**: Time the test has been active.
-- **VUs**: Number of concurrently running virtual users.
-- **reqs**: Total requests completed and current requests per second (RPS).
-- **errs**: Total failed requests and percentage error rate.
-- **p95**: 95th percentile latency (95% of requests completed faster than this time).
-
-### End-of-Test Summary Report
+When your test finishes, Spedious prints a beautiful summary:
 
 ```text
   ==================== TEST RESULTS SUMMARY ====================
-  Total Duration        : 3.00s
-  Iterations            : 23604 (7865.8/s)
-  Total Requests        : 70820 (23600.1/s)
-  Errors                : 7
-  Data Sent             : 1.8 MB
-  Data Received         : 4.7 MB
+  Total Duration        : 5.00s
+  Iterations            : 149 (29.8/s)     <-- Total shopping trips completed
+  Total Requests        : 149 (29.8/s)     <-- Total clicks made
+  Errors                : 0                <-- 0 mistakes! Perfection!
+  Data Received         : 2.3 KB
 
-  --- Latency Metrics ---
-  http_req_duration.....: min=0.00ms med=0.61ms avg=0.78ms max=31.26ms
-  percentiles...........: p90=1.64ms p95=1.86ms p99=2.51ms p99.9=3.55ms
+  --- Latency Metrics (How fast was the stand?) ---
+  http_req_duration.....: min=0.00ms med=0.51ms avg=0.80ms max=44.93ms
+  percentiles...........: p90=0.81ms p95=1.06ms p99=12.10ms
 
-  --- Step Breakdown ---
-  * auth_login          : reqs=23614 errs=2   avg=0.8ms p95=1.9ms min=0.0ms max=31.3ms
-  * list_items          : reqs=23605 errs=1   avg=0.7ms p95=1.8ms min=0.0ms max=6.0ms
-  * post_thing          : reqs=23601 errs=4   avg=0.8ms p95=1.9ms min=0.0ms max=4.7ms
+  --- Network Timing Breakdown ---
+  * blocked.............: avg=12.73ms      <-- Waiting for a free phone line
+  * connecting..........: avg=1.14ms       <-- Saying hello on the phone
+  * waiting (TTFB)......: avg=0.93ms       <-- Kitchen cooking time
+  * receiving...........: avg=0.65ms       <-- Delivery time
 
-  --- Thresholds ---
-  ✓ [PASS] p(95) < 200ms
+  --- Thresholds (The Report Card) ---
+  ✓ [PASS] p(95) < 50ms                    <-- Passed with flying colors!
   ✓ [PASS] rate < 0.01
   ==============================================================
   STATUS: PASSED
 ```
 
----
-
-## 7. Full Real-World Tutorial
-
-Here is a realistic scenario file testing an e-commerce API. Save this as `ecommerce_test.yaml`:
-
-```yaml
-version: 1
-name: ecommerce_load_test
-
-variables:
-  baseUrl: http://localhost:8080
-
-fragments:
-  user_login:
-    - request:
-        name: login
-        method: POST
-        url: ${baseUrl}/auth/login
-        body:
-          email: "tester_${vu.id}@example.com"
-          password: "SecretPassword123"
-      extract:
-        token: { jsonpath: "$.token" }
-      assert:
-        - status == 200
-
-scenarios:
-  customer_journey:
-    load:
-      executor: constant-users
-      vus: 25
-      duration: 30s
-    steps:
-      # Step 1: Login
-      - include: user_login
-
-      # Step 2: Browse catalog
-      - request:
-          name: get_catalog
-          method: GET
-          url: ${baseUrl}/items
-          headers:
-            Authorization: "Bearer ${token}"
-        extract:
-          chosenItem: { jsonpath: "$[0].id" }
-        assert:
-          - status == 200
-          - latency < 350ms
-        thinkTime: 500ms-1s
-
-      # Step 3: Place order
-      - request:
-          name: submit_order
-          method: POST
-          url: ${baseUrl}/orders
-          headers:
-            Authorization: "Bearer ${token}"
-            Idempotency-Key: ${uuid()}
-          body:
-            itemId: "${chosenItem}"
-            quantity: ${random(1, 5)}
-        assert:
-          - status in [200, 201]
-
-thresholds:
-  - metric: http_req_duration
-    rule: p(95) < 500ms
-  - metric: error_rate
-    rule: rate < 0.02
-```
-
-Run it with:
-```bash
-spedious run ecommerce_test.yaml
-```
+### What does `p95` mean?
+Imagine 100 students taking a test. If the **p95** is 1.06ms, it means **95 out of 100 students finished their lemonade in 1.06ms or faster**! Only 5 were slightly slower. It is the gold standard for measuring real user happiness.
 
 ---
 
-## 8. Common Mistakes & Troubleshooting
+## 11. Exporting Results (JSON & CSV)
 
-### 1. Quotation in YAML Flow Maps
-**Problem**: In YAML, brackets like `[0]` inside unquoted flow braces `{ jsonpath: $[0].id }` cause a YAML syntax error.  
-**Solution**: Always put quotes around the JSONPath string:
-```yaml
-# Correct:
-extract:
-  itemId: { jsonpath: "$[0].id" }
+Want to graph your results in Excel or save them for your boss?
+
+### Export a Pretty JSON Report Card:
+```powershell
+.\bin\spedious.exe run my_test.yaml --summary-export report.json
 ```
 
-### 2. Target Machine Connection Refused
-**Problem**: The live ticker shows `100% errs` immediately.  
-**Solution**: Check that your target service (`baseUrl`) is running and reachable from your machine. Test with `curl <url>` or a browser.
+### Export a CSV Spreadsheet:
+```powershell
+.\bin\spedious.exe run my_test.yaml --out csv=metrics.csv
+```
+This generates an Excel-ready spreadsheet with columns for `timestamp`, `active_vus`, `rps`, and `p95_duration_ms` over every second of the test!
 
-### 3. Threshold Fails
-**Problem**: `STATUS: FAILED (Thresholds breached)` with exit code 1.  
-**Solution**: The test completed, but your API's latency or error rate exceeded the limits you configured under `thresholds:`. Check the Step Breakdown to see which endpoint was slow or failing.
+---
+
+## 12. Common Pitfalls & Troubleshooting
+
+### 1. "YAML syntax error"
+* **The Culprit**: You forgot quotes around a JSONPath bracket!
+* **Wrong**: `id: { jsonpath: $[0].id }`
+* **Right**: `id: { jsonpath: "$[0].id" }`
+
+### 2. "Connection refused"
+* **The Culprit**: Your website or server is not turned on! Make sure your API is running and listening on the port (e.g. `http://localhost:5233` or `http://localhost:8080`).
+
+### 3. "STATUS: FAILED (Thresholds breached)"
+* **The Culprit**: Your test worked, but your website was too slow or had errors, failing the threshold goal you set. Check the **Step Breakdown** to see which endpoint was taking too long!
+
+---
+
+*Happy Load Testing! Now go release your robot army with Spedious!* 🚀
