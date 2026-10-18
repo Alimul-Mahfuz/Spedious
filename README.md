@@ -13,6 +13,8 @@ Spedious is a developer-first, CLI-first API load testing tool that simulates th
 - **Embedded Web UI**: Single self-contained binary featuring an optional web dashboard with real-time charts.
 - **Developer-Friendly CLI**: Clean terminal progress reporting, threshold evaluations, and CI/CD ready exit codes.
 
+📖 **Looking for a step-by-step tutorial without needing to know Go? Check out the [Comprehensive User Guide](docs/user-guide.md).**
+
 ## Quick Start
 
 ### Installation
