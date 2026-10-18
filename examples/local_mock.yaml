@@ -1,0 +1,57 @@
+version: 1
+name: local_mock_benchmark
+
+variables:
+  baseUrl: http://localhost:8089
+
+fragments:
+  login:
+    - request:
+        name: auth_login
+        method: POST
+        url: ${baseUrl}/auth/login
+        body:
+          email: "loadtester@example.com"
+          password: "password123"
+      extract:
+        token: { jsonpath: $.token }
+      assert:
+        - status == 200
+
+scenarios:
+  api_flow:
+    load:
+      executor: constant-users
+      vus: 20
+      duration: 3s
+    steps:
+      - include: login
+      - request:
+          name: list_items
+          method: GET
+          url: ${baseUrl}/items
+          headers:
+            Authorization: "Bearer ${token}"
+        extract:
+          firstId: { jsonpath: "$[0].id" }
+        assert:
+          - status == 200
+          - latency < 500ms
+        thinkTime: 10ms-30ms
+      - request:
+          name: post_thing
+          method: POST
+          url: ${baseUrl}/things
+          headers:
+            Authorization: "Bearer ${token}"
+            Idempotency-Key: ${uuid()}
+          body:
+            itemId: "${firstId}"
+        assert:
+          - status == 201
+
+thresholds:
+  - metric: http_req_duration
+    rule: p(95) < 200ms
+  - metric: error_rate
+    rule: rate < 0.01

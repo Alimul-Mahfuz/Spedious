@@ -1,0 +1,41 @@
+version: 1
+name: quickstart_api_test
+
+variables:
+  baseUrl: https://httpbin.org
+
+fragments:
+  check_headers:
+    - request:
+        name: get_headers
+        method: GET
+        url: ${baseUrl}/headers
+        headers:
+          X-Spedious-Client: "v1.0"
+        assert:
+          - status == 200
+
+scenarios:
+  main:
+    load:
+      executor: constant-users
+      vus: 5
+      duration: 5s
+    steps:
+      - include: check_headers
+      - request:
+          name: get_ip
+          method: GET
+          url: ${baseUrl}/ip
+        extract:
+          clientIp: { jsonpath: $.origin }
+        assert:
+          - status == 200
+          - latency < 3s
+        thinkTime: 100ms-300ms
+
+thresholds:
+  - metric: http_req_duration
+    rule: p(95) < 3s
+  - metric: error_rate
+    rule: rate < 0.05
