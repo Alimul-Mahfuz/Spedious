@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -61,9 +62,12 @@ with low overhead and accurate latency accounting (avoiding coordinated omission
 	}
 
 	var (
-		flagVUs      int
-		flagDuration time.Duration
-		flagQuiet    bool
+		flagVUs           int
+		flagDuration      time.Duration
+		flagQuiet         bool
+		flagSummaryExport string
+		flagOut           string
+		flagAbortOnFail   bool
 	)
 
 	runCmd := &cobra.Command{
@@ -104,6 +108,8 @@ with low overhead and accurate latency accounting (avoiding coordinated omission
 			defer stop()
 
 			eng := engine.NewEngine()
+			eng.SetAbortOnFail(flagAbortOnFail)
+
 			if !flagQuiet {
 				eng.SetProgressCallback(func(snap metrics.Snapshot) {
 					cw.PrintProgressLine(snap)
@@ -118,6 +124,28 @@ with low overhead and accurate latency accounting (avoiding coordinated omission
 			thresholdsPassed, thresholdResults := engine.EvaluateThresholds(f.Thresholds, snap)
 			cw.PrintSummary(snap, thresholdsPassed, thresholdResults)
 
+			// Handle exports
+			if flagSummaryExport != "" {
+				if err := output.WriteJSONSummary(flagSummaryExport, snap, thresholdsPassed, thresholdResults); err != nil {
+					fmt.Fprintf(os.Stderr, "Error writing JSON summary: %v\n", err)
+				} else {
+					fmt.Printf("  Summary report saved to %s\n", flagSummaryExport)
+				}
+			}
+
+			if flagOut != "" {
+				// Parse --out format, e.g. "csv=path/to/file.csv"
+				parts := strings.SplitN(flagOut, "=", 2)
+				if len(parts) == 2 && strings.ToLower(parts[0]) == "csv" {
+					csvPath := parts[1]
+					if err := output.WriteCSVTimeSeries(csvPath, snap.TimeSeries); err != nil {
+						fmt.Fprintf(os.Stderr, "Error writing CSV output: %v\n", err)
+					} else {
+						fmt.Printf("  CSV time-series saved to %s\n", csvPath)
+					}
+				}
+			}
+
 			if !thresholdsPassed {
 				os.Exit(1)
 			}
@@ -128,6 +156,9 @@ with low overhead and accurate latency accounting (avoiding coordinated omission
 	runCmd.Flags().IntVarP(&flagVUs, "vus", "u", 0, "Override virtual users count")
 	runCmd.Flags().DurationVarP(&flagDuration, "duration", "d", 0, "Override scenario duration (e.g. 10s, 1m)")
 	runCmd.Flags().BoolVarP(&flagQuiet, "quiet", "q", false, "Disable live progress output")
+	runCmd.Flags().StringVar(&flagSummaryExport, "summary-export", "", "Path to export JSON summary report")
+	runCmd.Flags().StringVar(&flagOut, "out", "", "Export time-series metrics (e.g. --out csv=results.csv)")
+	runCmd.Flags().BoolVar(&flagAbortOnFail, "abort-on-fail", false, "Abort run early if any threshold fails")
 
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(validateCmd)

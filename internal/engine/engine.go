@@ -21,9 +21,10 @@ type ProgressCallback func(snap metrics.Snapshot)
 
 // Engine runs scenario workloads using configured executors.
 type Engine struct {
-	protocol   *httpProto.HTTPProtocol
-	collector  *metrics.Collector
-	onProgress ProgressCallback
+	protocol    *httpProto.HTTPProtocol
+	collector   *metrics.Collector
+	onProgress  ProgressCallback
+	abortOnFail bool
 }
 
 // NewEngine creates an initialized load testing engine.
@@ -41,6 +42,11 @@ func (e *Engine) SetProgressCallback(cb ProgressCallback) {
 	e.onProgress = cb
 }
 
+// SetAbortOnFail enables early termination if any threshold fails during execution.
+func (e *Engine) SetAbortOnFail(abort bool) {
+	e.abortOnFail = abort
+}
+
 // Collector returns the engine's metrics collector.
 func (e *Engine) Collector() *metrics.Collector {
 	return e.collector
@@ -52,26 +58,55 @@ func (e *Engine) Run(ctx context.Context, f *scenario.File) (*metrics.Snapshot, 
 
 	baseVars := vars.NewStore(f.Variables)
 
-	// Start progress reporter goroutine if callback is set
-	progressCtx, cancelProgress := context.WithCancel(ctx)
+	runCtx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
+
+	// Progress reporter and time-series sampler ticker
+	progressCtx, cancelProgress := context.WithCancel(runCtx)
 	defer cancelProgress()
 
-	if e.onProgress != nil {
-		go func() {
-			ticker := time.NewTicker(500 * time.Millisecond)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ticker.C:
-					e.onProgress(e.collector.Snapshot())
-				case <-progressCtx.Done():
-					return
+	go func() {
+		ticker := time.NewTicker(500 * time.Millisecond)
+		sampleTicker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+		defer sampleTicker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				snap := e.collector.Snapshot()
+				if e.onProgress != nil {
+					e.onProgress(snap)
 				}
+				// Check abort-on-threshold-fail
+				if e.abortOnFail || hasAbortThreshold(f.Thresholds) {
+					passed, results := EvaluateThresholds(f.Thresholds, &snap)
+					if !passed {
+						for _, r := range results {
+							if !r.Passed {
+								fmt.Printf("\n[ALERT] Aborting run: threshold failed: %s (%s)\n", r.Rule, r.Message)
+								cancelRun()
+								return
+							}
+						}
+					}
+				}
+			case <-sampleTicker.C:
+				e.collector.RecordSample()
+			case <-progressCtx.Done():
+				return
 			}
-		}()
+		}
+	}()
+
+	// Compute weighted scenario allocations if weights are provided
+	totalWeight := 0.0
+	for _, sc := range f.Scenarios {
+		if sc.Weight > 0 {
+			totalWeight += sc.Weight
+		}
 	}
 
-	// Run all defined scenarios
 	var wg sync.WaitGroup
 	errCh := make(chan error, len(f.Scenarios))
 
@@ -80,15 +115,24 @@ func (e *Engine) Run(ctx context.Context, f *scenario.File) (*metrics.Snapshot, 
 		go func(name string, def scenario.ScenarioDefinition) {
 			defer wg.Done()
 			var err error
+
 			switch def.Load.Executor {
 			case scenario.ExecutorConstantUsers:
-				err = e.runConstantUsers(ctx, def, baseVars)
+				err = e.runConstantUsers(runCtx, def, baseVars)
 			case scenario.ExecutorPerVUIterations:
-				err = e.runPerVUIterations(ctx, def, baseVars)
+				err = e.runPerVUIterations(runCtx, def, baseVars)
+			case scenario.ExecutorSharedIterations:
+				err = e.runSharedIterations(runCtx, def, baseVars)
+			case scenario.ExecutorRampingUsers:
+				err = e.runRampingUsers(runCtx, def, baseVars)
+			case scenario.ExecutorConstantArrivalRate:
+				err = e.runConstantArrivalRate(runCtx, def, baseVars)
+			case scenario.ExecutorRampingArrivalRate:
+				err = e.runRampingArrivalRate(runCtx, def, baseVars)
 			default:
-				// Fallback to constant-users if not specified
-				err = e.runConstantUsers(ctx, def, baseVars)
+				err = e.runConstantUsers(runCtx, def, baseVars)
 			}
+
 			if err != nil && err != context.Canceled {
 				errCh <- fmt.Errorf("scenario %q error: %w", name, err)
 			}
@@ -104,6 +148,15 @@ func (e *Engine) Run(ctx context.Context, f *scenario.File) (*metrics.Snapshot, 
 
 	snap := e.collector.Snapshot()
 	return &snap, nil
+}
+
+func hasAbortThreshold(thresholds []scenario.Threshold) bool {
+	for _, t := range thresholds {
+		if t.Abort {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *Engine) runConstantUsers(ctx context.Context, sc scenario.ScenarioDefinition, baseVars *vars.Store) error {
@@ -132,7 +185,6 @@ func (e *Engine) runConstantUsers(ctx context.Context, sc scenario.ScenarioDefin
 			activeCount.Add(1)
 			e.collector.SetActiveVUs(activeCount.Load())
 
-			// Isolated state per VU
 			vuVars := baseVars.Clone()
 			vuVars.Set("vu.id", vuID)
 			client, jar := e.protocol.NewVUClient()
@@ -146,6 +198,7 @@ func (e *Engine) runConstantUsers(ctx context.Context, sc scenario.ScenarioDefin
 				}
 
 				iteration++
+				iterStart := time.Now()
 				vuVars.Set("vu.iteration", iteration)
 				vuCtx := &protocol.VUContext{
 					VUID:       vuID,
@@ -156,6 +209,7 @@ func (e *Engine) runConstantUsers(ctx context.Context, sc scenario.ScenarioDefin
 				}
 
 				flow, _ := stepRunner.ExecuteSteps(runCtx, vuCtx, sc.Steps)
+				e.collector.RecordIterationDuration(time.Since(iterStart))
 				if flow == FlowAbortTest {
 					cancel()
 					return
@@ -208,6 +262,7 @@ func (e *Engine) runPerVUIterations(ctx context.Context, sc scenario.ScenarioDef
 				default:
 				}
 
+				iterStart := time.Now()
 				vuVars.Set("vu.iteration", iter)
 				vuCtx := &protocol.VUContext{
 					VUID:       vuID,
@@ -218,6 +273,7 @@ func (e *Engine) runPerVUIterations(ctx context.Context, sc scenario.ScenarioDef
 				}
 
 				flow, _ := stepRunner.ExecuteSteps(runCtx, vuCtx, sc.Steps)
+				e.collector.RecordIterationDuration(time.Since(iterStart))
 				if flow == FlowAbortTest {
 					cancel()
 					return
@@ -226,6 +282,421 @@ func (e *Engine) runPerVUIterations(ctx context.Context, sc scenario.ScenarioDef
 				e.collector.IncIterations()
 			}
 		}(vu)
+	}
+
+	wg.Wait()
+	e.collector.SetActiveVUs(0)
+	return nil
+}
+
+func (e *Engine) runSharedIterations(ctx context.Context, sc scenario.ScenarioDefinition, baseVars *vars.Store) error {
+	vus := sc.Load.VUs
+	if vus <= 0 {
+		vus = 1
+	}
+	totalIterations := int64(sc.Load.Iterations)
+	if totalIterations <= 0 {
+		totalIterations = 1
+	}
+
+	var iterCounter atomic.Int64
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	stepRunner := NewStepRunner(e.protocol, e.collector)
+	var activeCount atomic.Int64
+	var wg sync.WaitGroup
+
+	for vu := 1; vu <= vus; vu++ {
+		wg.Add(1)
+		go func(vuID int) {
+			defer wg.Done()
+			defer activeCount.Add(-1)
+			activeCount.Add(1)
+			e.collector.SetActiveVUs(activeCount.Load())
+
+			vuVars := baseVars.Clone()
+			vuVars.Set("vu.id", vuID)
+			client, jar := e.protocol.NewVUClient()
+
+			for {
+				select {
+				case <-runCtx.Done():
+					return
+				default:
+				}
+
+				iter := iterCounter.Add(1)
+				if iter > totalIterations {
+					return
+				}
+
+				iterStart := time.Now()
+				vuVars.Set("vu.iteration", int(iter))
+				vuCtx := &protocol.VUContext{
+					VUID:       vuID,
+					Iteration:  int(iter),
+					Vars:       vuVars,
+					HTTPClient: client,
+					CookieJar:  jar,
+				}
+
+				flow, _ := stepRunner.ExecuteSteps(runCtx, vuCtx, sc.Steps)
+				e.collector.RecordIterationDuration(time.Since(iterStart))
+				if flow == FlowAbortTest {
+					cancel()
+					return
+				}
+				e.collector.IncIterations()
+			}
+		}(vu)
+	}
+
+	wg.Wait()
+	e.collector.SetActiveVUs(0)
+	return nil
+}
+
+func (e *Engine) runRampingUsers(ctx context.Context, sc scenario.ScenarioDefinition, baseVars *vars.Store) error {
+	stages := sc.Load.Stages
+	if len(stages) == 0 {
+		return fmt.Errorf("no stages configured for ramping-users")
+	}
+
+	stepRunner := NewStepRunner(e.protocol, e.collector)
+	var activeCount atomic.Int64
+	var currentVUID atomic.Int64
+	stopChans := make(chan chan struct{}, 10000)
+
+	totalDuration := time.Duration(0)
+	for _, st := range stages {
+		totalDuration += st.Duration.Duration()
+	}
+
+	runCtx, cancel := context.WithTimeout(ctx, totalDuration)
+	defer cancel()
+
+	var wg sync.WaitGroup
+
+	// Stage ramp manager loop
+	managerDone := make(chan struct{})
+	go func() {
+		defer close(managerDone)
+		currentStageStart := time.Now()
+		startTarget := 0
+		stageIdx := 0
+
+		ticker := time.NewTicker(50 * time.Millisecond)
+		defer ticker.Stop()
+
+		for stageIdx < len(stages) {
+			st := stages[stageIdx]
+			stDur := st.Duration.Duration()
+			elapsed := time.Since(currentStageStart)
+
+			if elapsed >= stDur {
+				startTarget = st.Target
+				stageIdx++
+				currentStageStart = time.Now()
+				if stageIdx >= len(stages) {
+					break
+				}
+				continue
+			}
+
+			// Linear interpolation
+			progress := float64(elapsed) / float64(stDur)
+			target := startTarget + int(float64(st.Target-startTarget)*progress)
+
+			currentActive := activeCount.Load()
+			if currentActive < int64(target) {
+				diff := int(int64(target) - currentActive)
+				for i := 0; i < diff; i++ {
+					vID := int(currentVUID.Add(1))
+					stopCh := make(chan struct{})
+					stopChans <- stopCh
+					activeCount.Add(1)
+					e.collector.SetActiveVUs(activeCount.Load())
+					wg.Add(1)
+					go func(vuID int, stop <-chan struct{}) {
+						defer wg.Done()
+						defer func() {
+							activeCount.Add(-1)
+							e.collector.SetActiveVUs(activeCount.Load())
+						}()
+						vuVars := baseVars.Clone()
+						vuVars.Set("vu.id", vuID)
+						client, jar := e.protocol.NewVUClient()
+						iter := 0
+						for {
+							select {
+							case <-runCtx.Done():
+								return
+							case <-stop:
+								return
+							default:
+							}
+							iter++
+							iterStart := time.Now()
+							vuVars.Set("vu.iteration", iter)
+							vuCtx := &protocol.VUContext{
+								VUID:       vuID,
+								Iteration:  iter,
+								Vars:       vuVars,
+								HTTPClient: client,
+								CookieJar:  jar,
+							}
+							flow, _ := stepRunner.ExecuteSteps(runCtx, vuCtx, sc.Steps)
+							e.collector.RecordIterationDuration(time.Since(iterStart))
+							if flow == FlowAbortTest {
+								cancel()
+								return
+							}
+							e.collector.IncIterations()
+						}
+					}(vID, stopCh)
+				}
+			} else if currentActive > int64(target) {
+				diff := int(currentActive - int64(target))
+				for i := 0; i < diff; i++ {
+					select {
+					case ch := <-stopChans:
+						close(ch)
+					default:
+					}
+				}
+			}
+
+			select {
+			case <-runCtx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+
+	<-managerDone
+	wg.Wait()
+	e.collector.SetActiveVUs(0)
+	return nil
+}
+
+// runConstantArrivalRate implements the Open Model to avoid coordinated omission.
+func (e *Engine) runConstantArrivalRate(ctx context.Context, sc scenario.ScenarioDefinition, baseVars *vars.Store) error {
+	rate := sc.Load.Rate
+	if rate <= 0 {
+		rate = 10
+	}
+	timeUnit := sc.Load.TimeUnit.Duration()
+	if timeUnit <= 0 {
+		timeUnit = 1 * time.Second
+	}
+	duration := sc.Load.Duration.Duration()
+	if duration <= 0 {
+		duration = 10 * time.Second
+	}
+	maxVUs := sc.Load.MaxVUs
+	if maxVUs <= 0 {
+		maxVUs = 1000
+	}
+
+	interval := time.Duration(float64(timeUnit) / float64(rate))
+
+	runCtx, cancel := context.WithTimeout(ctx, duration)
+	defer cancel()
+
+	stepRunner := NewStepRunner(e.protocol, e.collector)
+	var activeWorkers atomic.Int64
+	var vuCounter atomic.Int64
+	var wg sync.WaitGroup
+
+	startTime := time.Now()
+	iterationIndex := 0
+
+	for {
+		iterationIndex++
+		intendedStart := startTime.Add(time.Duration(iterationIndex) * interval)
+		waitDuration := time.Until(intendedStart)
+
+		if waitDuration > 0 {
+			select {
+			case <-runCtx.Done():
+				wg.Wait()
+				e.collector.SetActiveVUs(0)
+				return nil
+			case <-time.After(waitDuration):
+			}
+		} else {
+			// Check context even if overdue
+			select {
+			case <-runCtx.Done():
+				wg.Wait()
+				e.collector.SetActiveVUs(0)
+				return nil
+			default:
+			}
+		}
+
+		// Check if active worker pool capacity is reached
+		currentActive := activeWorkers.Load()
+		if currentActive >= int64(maxVUs) {
+			// Pool exhausted: iteration is dropped!
+			e.collector.IncDroppedIterations()
+			continue
+		}
+
+		activeWorkers.Add(1)
+		e.collector.SetActiveVUs(activeWorkers.Load())
+		vID := int(vuCounter.Add(1))
+		iterNum := iterationIndex
+
+		wg.Add(1)
+		go func(vuID int, iter int, intendedTime time.Time) {
+			defer wg.Done()
+			defer func() {
+				activeWorkers.Add(-1)
+				e.collector.SetActiveVUs(activeWorkers.Load())
+			}()
+
+			vuVars := baseVars.Clone()
+			vuVars.Set("vu.id", vuID)
+			vuVars.Set("vu.iteration", iter)
+			client, jar := e.protocol.NewVUClient()
+
+			vuCtx := &protocol.VUContext{
+				VUID:       vuID,
+				Iteration:  iter,
+				Vars:       vuVars,
+				HTTPClient: client,
+				CookieJar:  jar,
+			}
+
+			flow, _ := stepRunner.ExecuteSteps(runCtx, vuCtx, sc.Steps)
+			// Calculate iteration duration from the INTENDED start time to avoid coordinated omission!
+			e.collector.RecordIterationDuration(time.Since(intendedTime))
+			if flow == FlowAbortTest {
+				cancel()
+				return
+			}
+			e.collector.IncIterations()
+		}(vID, iterNum, intendedStart)
+	}
+}
+
+// runRampingArrivalRate implements the Open Model with changing arrival rate over time.
+func (e *Engine) runRampingArrivalRate(ctx context.Context, sc scenario.ScenarioDefinition, baseVars *vars.Store) error {
+	stages := sc.Load.Stages
+	if len(stages) == 0 {
+		return fmt.Errorf("no stages configured for ramping-arrival-rate")
+	}
+
+	timeUnit := sc.Load.TimeUnit.Duration()
+	if timeUnit <= 0 {
+		timeUnit = 1 * time.Second
+	}
+	maxVUs := sc.Load.MaxVUs
+	if maxVUs <= 0 {
+		maxVUs = 1000
+	}
+
+	totalDuration := time.Duration(0)
+	for _, st := range stages {
+		totalDuration += st.Duration.Duration()
+	}
+
+	runCtx, cancel := context.WithTimeout(ctx, totalDuration)
+	defer cancel()
+
+	stepRunner := NewStepRunner(e.protocol, e.collector)
+	var activeWorkers atomic.Int64
+	var vuCounter atomic.Int64
+	var wg sync.WaitGroup
+
+	startTime := time.Now()
+	stageIdx := 0
+	currentStageStart := startTime
+	startTarget := 0
+	iterCount := 0
+
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-runCtx.Done():
+			wg.Wait()
+			e.collector.SetActiveVUs(0)
+			return nil
+		case <-ticker.C:
+		}
+
+		elapsed := time.Since(currentStageStart)
+		st := stages[stageIdx]
+		stDur := st.Duration.Duration()
+
+		if elapsed >= stDur {
+			startTarget = st.Target
+			stageIdx++
+			currentStageStart = time.Now()
+			if stageIdx >= len(stages) {
+				break
+			}
+			continue
+		}
+
+		progress := float64(elapsed) / float64(stDur)
+		currentRate := float64(startTarget) + float64(st.Target-startTarget)*progress
+		if currentRate <= 0 {
+			continue
+		}
+
+		interval := time.Duration(float64(timeUnit) / currentRate)
+		intendedTime := time.Now()
+
+		// Launch iteration for current tick interval
+		iterCount++
+		currentActive := activeWorkers.Load()
+		if currentActive >= int64(maxVUs) {
+			e.collector.IncDroppedIterations()
+			continue
+		}
+
+		activeWorkers.Add(1)
+		e.collector.SetActiveVUs(activeWorkers.Load())
+		vID := int(vuCounter.Add(1))
+		iterNum := iterCount
+
+		wg.Add(1)
+		go func(vuID, iter int, intended time.Time) {
+			defer wg.Done()
+			defer func() {
+				activeWorkers.Add(-1)
+				e.collector.SetActiveVUs(activeWorkers.Load())
+			}()
+
+			vuVars := baseVars.Clone()
+			vuVars.Set("vu.id", vuID)
+			vuVars.Set("vu.iteration", iter)
+			client, jar := e.protocol.NewVUClient()
+
+			vuCtx := &protocol.VUContext{
+				VUID:       vuID,
+				Iteration:  iter,
+				Vars:       vuVars,
+				HTTPClient: client,
+				CookieJar:  jar,
+			}
+
+			flow, _ := stepRunner.ExecuteSteps(runCtx, vuCtx, sc.Steps)
+			e.collector.RecordIterationDuration(time.Since(intended))
+			if flow == FlowAbortTest {
+				cancel()
+				return
+			}
+			e.collector.IncIterations()
+		}(vID, iterNum, intendedTime)
+
+		time.Sleep(interval)
 	}
 
 	wg.Wait()
@@ -263,7 +734,6 @@ func EvaluateThresholds(thresholds []scenario.Threshold, snap *metrics.Snapshot)
 }
 
 func evalDurationThreshold(rule string, snap *metrics.Snapshot) check.Result {
-	// e.g. "p(95) < 500ms" or "p95 < 500ms" or "max < 1s"
 	rule = strings.TrimSpace(rule)
 	var actual float64
 
@@ -286,7 +756,6 @@ func evalDurationThreshold(rule string, snap *metrics.Snapshot) check.Result {
 		actual = snap.P95
 	}
 
-	// Parse operator and threshold target
 	ops := []string{"<=", ">=", "<", ">", "=="}
 	for _, op := range ops {
 		idx := strings.Index(rule, op)
@@ -322,7 +791,6 @@ func evalDurationThreshold(rule string, snap *metrics.Snapshot) check.Result {
 }
 
 func evalErrorRateThreshold(rule string, snap *metrics.Snapshot) check.Result {
-	// e.g. "rate < 0.01" or "< 0.05"
 	rule = strings.TrimSpace(rule)
 	var rate float64
 	if snap.TotalRequests > 0 {

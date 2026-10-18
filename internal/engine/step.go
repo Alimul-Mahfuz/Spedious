@@ -67,6 +67,9 @@ func (r *StepRunner) ExecuteStep(ctx context.Context, vuCtx *protocol.VUContext,
 	if step.Request != nil {
 		reqStep := step.Request
 		res, err := r.protocol.Execute(ctx, vuCtx, reqStep)
+		if ctx.Err() != nil {
+			return FlowAbortTest, ctx.Err()
+		}
 
 		isError := err != nil || (res != nil && res.AssertionFails > 0)
 		if res != nil {
@@ -80,11 +83,7 @@ func (r *StepRunner) ExecuteStep(ctx context.Context, vuCtx *protocol.VUContext,
 				}
 			}
 
-			var dur time.Duration
-			if res.Timing.TotalDuration > 0 {
-				dur = res.Timing.TotalDuration
-			}
-			r.collector.RecordRequest(reqStep.Name, dur, isError, res.BytesSent, res.BytesReceived)
+			r.collector.RecordRequestWithTiming(reqStep.Name, res.Timing, isError, res.BytesSent, res.BytesReceived)
 		}
 
 		// Handle think time

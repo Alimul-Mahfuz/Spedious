@@ -402,8 +402,83 @@ spedious run my_scenario.yaml --duration 5m
 # Combine overrides
 spedious run my_scenario.yaml --vus 50 --duration 2m
 
+# Export JSON summary report
+spedious run my_scenario.yaml --summary-export report.json
+
+# Export time-series metrics to CSV
+spedious run my_scenario.yaml --out csv=timeseries.csv
+
+# Abort test immediately if any threshold is violated
+spedious run my_scenario.yaml --abort-on-fail
+
 # Quiet mode (disables live ticker for clean CI/CD log output)
 spedious run my_scenario.yaml --quiet
+```
+
+---
+
+### Load Shape Executors Reference
+
+Spedious supports both **Closed** (concurrency-focused) and **Open** (arrival-rate-focused) models:
+
+#### 1. `constant-users` (Closed Model)
+A fixed number of VUs looping continuously for a set duration:
+```yaml
+load:
+  executor: constant-users
+  vus: 50
+  duration: 1m
+```
+
+#### 2. `ramping-users` (Closed Model)
+Ramps VUs up and down across defined stages:
+```yaml
+load:
+  executor: ramping-users
+  stages:
+    - { duration: 30s, target: 50 }   # Ramp up to 50 VUs over 30s
+    - { duration: 1m, target: 50 }    # Stay at 50 VUs for 1 minute
+    - { duration: 15s, target: 0 }    # Ramp down to 0
+```
+
+#### 3. `per-vu-iterations` (Closed Model)
+Each VU completes a fixed number of iterations, then stops:
+```yaml
+load:
+  executor: per-vu-iterations
+  vus: 10
+  iterations: 100                    # Each VU runs 100 times (total 1,000 iterations)
+```
+
+#### 4. `shared-iterations` (Closed Model)
+A shared total pool of iterations distributed among VUs:
+```yaml
+load:
+  executor: shared-iterations
+  vus: 10
+  iterations: 500                    # 10 workers consume from 500 total iterations
+```
+
+#### 5. `constant-arrival-rate` (Open Model - Avoids Coordinated Omission)
+Starts iterations at a constant rate regardless of target response times. If the target server slows down, queued latency is accurately captured rather than understated:
+```yaml
+load:
+  executor: constant-arrival-rate
+  rate: 100                          # 100 iterations per timeUnit
+  timeUnit: 1s
+  duration: 1m
+  maxVUs: 200                        # Maximum concurrent worker capacity
+```
+
+#### 6. `ramping-arrival-rate` (Open Model)
+Ramps the arrival rate across stages:
+```yaml
+load:
+  executor: ramping-arrival-rate
+  stages:
+    - { duration: 30s, target: 50 }   # Ramp to 50 iterations/sec
+    - { duration: 1m, target: 100 }   # Ramp to 100 iterations/sec
+  maxVUs: 300
 ```
 
 ---

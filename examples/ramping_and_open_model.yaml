@@ -1,0 +1,29 @@
+version: 1
+name: advanced_load_patterns
+
+variables:
+  baseUrl: http://localhost:8089
+
+scenarios:
+  # Open arrival-rate scenario: guarantees steady arrival rate regardless of response times
+  steady_arrival_flow:
+    load:
+      executor: constant-arrival-rate
+      rate: 30                  # 30 iterations started per second
+      timeUnit: 1s
+      duration: 5s
+      maxVUs: 100               # maximum worker capacity
+    steps:
+      - request:
+          name: health_check
+          method: GET
+          url: ${baseUrl}/health
+        assert:
+          - status == 200
+          - latency < 100ms
+
+thresholds:
+  - metric: http_req_duration
+    rule: p(95) < 50ms
+  - metric: error_rate
+    rule: rate < 0.01

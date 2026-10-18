@@ -92,6 +92,30 @@ func (c *ConsoleWriter) PrintSummary(s *metrics.Snapshot, thresholdsPassed bool,
 	fmt.Fprintf(c.Out, "  percentiles...........: p90=%.2fms p95=%.2fms p99=%.2fms p99.9=%.2fms\n",
 		s.P90, s.P95, s.P99, s.P999)
 
+	if s.WaitingDuration.Count > 0 || s.ConnectingDuration.Count > 0 {
+		fmt.Fprintln(c.Out, "\n  --- Network Timing Breakdown (avg / p95) ---")
+		if s.BlockedDuration.Count > 0 {
+			fmt.Fprintf(c.Out, "  * blocked.............: avg=%.2fms p95=%.2fms\n", s.BlockedDuration.Mean, s.BlockedDuration.P95)
+		}
+		if s.ConnectingDuration.Count > 0 {
+			fmt.Fprintf(c.Out, "  * connecting..........: avg=%.2fms p95=%.2fms\n", s.ConnectingDuration.Mean, s.ConnectingDuration.P95)
+		}
+		if s.TLSDuration.Count > 0 {
+			fmt.Fprintf(c.Out, "  * tls_handshaking.....: avg=%.2fms p95=%.2fms\n", s.TLSDuration.Mean, s.TLSDuration.P95)
+		}
+		if s.WaitingDuration.Count > 0 {
+			fmt.Fprintf(c.Out, "  * waiting (TTFB)......: avg=%.2fms p95=%.2fms\n", s.WaitingDuration.Mean, s.WaitingDuration.P95)
+		}
+		if s.ReceivingDuration.Count > 0 {
+			fmt.Fprintf(c.Out, "  * receiving...........: avg=%.2fms p95=%.2fms\n", s.ReceivingDuration.Mean, s.ReceivingDuration.P95)
+		}
+	}
+
+	if s.IterationDuration.Count > 0 {
+		fmt.Fprintf(c.Out, "  iteration_duration....: avg=%.2fms p95=%.2fms min=%.2fms max=%.2fms\n",
+			s.IterationDuration.Mean, s.IterationDuration.P95, s.IterationDuration.Min, s.IterationDuration.Max)
+	}
+
 	if len(s.StepStats) > 0 {
 		fmt.Fprintln(c.Out, "\n  --- Step Breakdown ---")
 		for name, stat := range s.StepStats {

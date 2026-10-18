@@ -1,0 +1,62 @@
+version: 1
+name: customer_order_creation_1000_vus
+
+variables:
+  baseUrl: http://localhost:5233
+
+scenarios:
+  order_creation_flow:
+    load:
+      # Closed model: 1,000 simultaneous Virtual Users running continuously
+      executor: constant-users
+      vus: 1000
+      duration: 30s            # Adjust test duration as needed (e.g. 1m, 5m)
+    steps:
+      # Step 1: Create a new order with dynamic customer ID, items, and quantities
+      - request:
+          name: create_order
+          method: POST
+          url: ${baseUrl}/api/orders
+          headers:
+            Content-Type: application/json
+            Accept: application/json
+            X-Request-Id: ${uuid()}
+          body:
+            customerId: ${random(100, 999)}
+            shippingAddress: "${random(100, 999)} Evergreen Terrace, Springfield, OR 97477"
+            items:
+              - productId: 1001
+                price: 49.99
+                quantity: ${random(1, 5)}
+                discount: 5.0
+                taxId: 4.5
+              - productId: 1002
+                price: 19.99
+                quantity: ${random(1, 3)}
+                discount: 0.0
+                taxId: 1.8
+        extract:
+          # Extract the created order ID from response JSON
+          orderId: { jsonpath: "$.id" }
+        assert:
+          - status in [200, 201]
+          - latency < 1500ms
+        thinkTime: 200ms-500ms
+
+      # Step 2: Fetch the created order to verify it was stored
+      - request:
+          name: get_order_by_id
+          method: GET
+          url: ${baseUrl}/api/orders/${orderId}
+          headers:
+            Accept: application/json
+        assert:
+          - status == 200
+        thinkTime: 100ms-300ms
+
+# Pass/Fail criteria for the load test
+thresholds:
+  - metric: http_req_duration
+    rule: p(95) < 800ms        # 95% of orders must be processed under 800ms
+  - metric: error_rate
+    rule: rate < 0.02          # Fail if error rate exceeds 2%
